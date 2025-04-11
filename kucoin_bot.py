@@ -1,4 +1,4 @@
-# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Full Upgrade: AI Sizing, Trailing Stop, Trend Filter, News Filter)
+# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Full Upgrade with Working Proxy)
 
 import ccxt
 import time
@@ -8,6 +8,17 @@ import os
 from datetime import datetime
 import openai
 
+# === Webshare Proxy Credentials ===
+proxy_user = "akcuwuie"
+proxy_pass = "oyfguhicnuof"
+proxy_ip = "45.151.162.198"
+proxy_port = "6600"
+
+proxy = {
+    "http": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}",
+    "https": f"http://{proxy_user}:{proxy_pass}@{proxy_ip}:{proxy_port}"
+}
+
 # === API Keys ===
 kucoin_api_key = os.getenv('KUCOIN_API_KEY')
 kucoin_secret = os.getenv('KUCOIN_SECRET')
@@ -15,12 +26,6 @@ kucoin_password = os.getenv('KUCOIN_PASSWORD')
 telegram_token = os.getenv('TELEGRAM_TOKEN')
 telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
 openai.api_key = os.getenv('OPENAI_API_KEY')
-
-# === Updated Proxy ===
-proxy = {
-    "http": "http://51.159.115.233:3128",
-    "https": "http://51.159.115.233:3128"
-}
 
 # === Symbols for Scalping ===
 symbols = ['DOGE/USDT', 'SHIB/USDT', 'PEPE/USDT', 'FLOKI/USDT']
@@ -72,7 +77,7 @@ def fetch_trade_amounts():
             price = prices[symbol]
             amount = budget / price
             value = amount * price
-            trade_amounts[symbol] = round(amount, 2 if symbol in ['DOGE/USDT','SHIB/USDT','PEPE/USDT','FLOKI/USDT'] else 4) if value >= min_usdt_trade_value else 0.0
+            trade_amounts[symbol] = round(amount, 2) if value >= min_usdt_trade_value else 0.0
         return trade_amounts
     except Exception as e:
         send_telegram(f"❌ Trade amount fetch error: {e}")
@@ -158,7 +163,7 @@ def place_order(symbol, side, trade_amounts):
             s['in_position'] = False
             send_telegram(f"💰 {symbol} PnL: {pnl:.4f} USDT\n📊 Total: {s['profit_total']:.4f} USDT")
             log_trade(symbol, side, price, amount, pnl)
-        send_telegram(f"📥 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}")
+        send_telegram(f"📅 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}")
         log_trade(symbol, side, price, amount)
     except Exception as e:
         send_telegram(f"❌ Order Error {symbol}: {e}")
