@@ -1,4 +1,4 @@
-# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Low Budget Optimized with Full Features + Proxy)
+# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Full Upgrade: AI Sizing, Trailing Stop, Trend Filter, News Filter)
 
 import ccxt
 import time
@@ -17,23 +17,19 @@ telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
 # === Proxy Support ===
-kucoin_proxy = {
+proxy = {
     "http": "http://116.203.151.31:8080",
     "https": "http://116.203.151.31:8080"
 }
 
-news_proxy = {
-    "http": "http://51.158.68.133:8811",
-    "https": "http://51.158.68.133:8811"
-}
-
-# === Optimized Symbols for Low Budget ===
+# === Symbols for Scalping ===
 symbols = ['DOGE/USDT', 'SHIB/USDT', 'PEPE/USDT', 'FLOKI/USDT']
 
 min_usdt_trade_value = 1.5
 investment_ratio = 0.5
 scalp_tp_percent = 0.5
 scalp_sl_percent = 0.3
+trail_percent = 0.2
 news_keywords = ["crash", "exploit", "hacked", "SEC", "lawsuit"]
 
 exchange = ccxt.kucoin({
@@ -41,13 +37,14 @@ exchange = ccxt.kucoin({
     'secret': kucoin_secret,
     'password': kucoin_password,
     'enableRateLimit': True,
-    'proxies': kucoin_proxy
+    'proxies': proxy
 })
 
 state = {
     symbol: {
         'in_position': False,
         'entry_price': 0,
+        'highest_price': 0,
         'profit_total': 0.0,
         'daily_pnl': 0.0
     } for symbol in symbols
@@ -56,7 +53,7 @@ state = {
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-        requests.post(url, data={'chat_id': telegram_chat_id, 'text': msg}, proxies=news_proxy)
+        requests.post(url, data={'chat_id': telegram_chat_id, 'text': msg}, proxies=proxy)
     except Exception as e:
         print(f"[Telegram Error] {e}")
 
@@ -84,11 +81,14 @@ def fetch_trade_amounts():
 def check_scalp_signal(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
+    df['ema200'] = df['close'].ewm(span=200).mean()
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
+    if df['close'].iloc[-1] < df['ema200'].iloc[-1]:
+        return None
     if df['rsi'].iloc[-1] < 30 and df['ema9'].iloc[-1] > df['ema21'].iloc[-1]:
         return 'buy'
     elif df['rsi'].iloc[-1] > 70 and df['ema9'].iloc[-1] < df['ema21'].iloc[-1]:
@@ -99,7 +99,7 @@ def ai_confidence_score(symbol, signal):
     if signal is None:
         return 0.0
     try:
-        prompt = f"Analyze the symbol {symbol}. The bot detected a {signal.upper()} signal based on RSI + EMA strategy. Should we proceed with the trade? Give a confidence score from 0 to 1."
+        prompt = f"Analyze {symbol}. Signal: {signal.upper()}. Return confidence score from 0 to 1."
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
@@ -114,12 +114,12 @@ def ai_confidence_score(symbol, signal):
 def news_filter():
     try:
         url = "https://cryptopanic.com/api/v1/posts/?auth_token=demo&kind=news"
-        res = requests.get(url, proxies=news_proxy)
+        res = requests.get(url, proxies=proxy)
         articles = res.json().get('results', [])
         for article in articles:
             for word in news_keywords:
                 if word in article['title'].lower():
-                    send_telegram(f"🛑 News Risk Detected: {article['title']}")
+                    send_telegram(f"🛑 News Risk: {article['title']}")
                     return False
         return True
     except Exception as e:
@@ -148,6 +148,7 @@ def place_order(symbol, side, trade_amounts):
         price = full['average']
         if side == 'buy':
             s['entry_price'] = price
+            s['highest_price'] = price
             s['in_position'] = True
         else:
             pnl = (price - s['entry_price']) * amount
@@ -157,9 +158,7 @@ def place_order(symbol, side, trade_amounts):
             s['in_position'] = False
             send_telegram(f"💰 {symbol} PnL: {pnl:.4f} USDT\n📊 Total: {s['profit_total']:.4f} USDT")
             log_trade(symbol, side, price, amount, pnl)
-        msg = f"📅 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}"
-        send_telegram(msg)
-        print(msg)
+        send_telegram(f"📥 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}")
         log_trade(symbol, side, price, amount)
     except Exception as e:
         send_telegram(f"❌ Order Error {symbol}: {e}")
@@ -177,11 +176,11 @@ def send_daily_summary():
     send_telegram(summary)
 
 def run_bot():
-    send_telegram("🤖 Bot Started with Smart Low-Budget Strategy")
+    send_telegram("🤖 Smart Scalping Bot Running with AI, News, Trailing, Trend Filters")
     summary_timer = time.time()
     while True:
         if not news_filter():
-            print("🛑 News risk detected. Pausing trades.")
+            print("🛑 News blocked trading")
             time.sleep(300)
             continue
         trade_amounts = fetch_trade_amounts()
@@ -194,18 +193,18 @@ def run_bot():
             price = df['close'].iloc[-1]
             s = state[symbol]
             if score == 0.0:
-                print(f"AI filtered out weak {signal} signal for {symbol}")
+                print(f"AI filtered weak {signal} for {symbol}")
                 continue
             if not s['in_position'] and signal == 'buy':
                 place_order(symbol, 'buy', trade_amounts)
             elif s['in_position']:
+                s['highest_price'] = max(s['highest_price'], price)
                 tp = s['entry_price'] * (1 + scalp_tp_percent / 100)
+                trail_stop = s['highest_price'] * (1 - trail_percent / 100)
                 sl = s['entry_price'] * (1 - scalp_sl_percent / 100)
-                if price >= tp:
-                    send_telegram(f"🌟 TP HIT {symbol} at {price:.6f}")
-                    place_order(symbol, 'sell', trade_amounts)
-                elif price <= sl:
-                    send_telegram(f"🛑 SL HIT {symbol} at {price:.6f}")
+                if price >= tp or price <= sl or price <= trail_stop:
+                    tag = "TP" if price >= tp else ("SL" if price <= sl else "TRAIL")
+                    send_telegram(f"🔁 {tag} EXIT {symbol} at {price:.6f}")
                     place_order(symbol, 'sell', trade_amounts)
         if time.time() - summary_timer > 86400:
             send_daily_summary()
