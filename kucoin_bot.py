@@ -10,7 +10,7 @@ from datetime import datetime
 import random
 import openai
 
-load_dotenv()
+
 
 # === API Keys ===
 kucoin_api_key = os.getenv('KUCOIN_API_KEY')
