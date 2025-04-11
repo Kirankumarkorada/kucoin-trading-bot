@@ -1,1 +1,1 @@
-web: python bot.py
+worker: python kucoin_bot.py
