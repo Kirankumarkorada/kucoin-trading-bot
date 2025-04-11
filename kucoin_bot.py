@@ -1,4 +1,4 @@
-# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Low Budget Optimized)
+# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Low Budget Optimized with Proxy Support)
 
 import ccxt
 import time
@@ -15,6 +15,12 @@ kucoin_password = os.getenv('KUCOIN_PASSWORD')
 telegram_token = os.getenv('TELEGRAM_TOKEN')
 telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
 openai.api_key = os.getenv('OPENAI_API_KEY')
+
+# === Proxy Support (Optional, use if KuCoin is blocked in your region) ===
+proxies = {
+    "http": "http://51.79.50.31:9300",
+    "https": "http://51.79.50.31:9300"
+}
 
 # === Optimized Symbols for Low Budget ===
 symbols = [
@@ -49,7 +55,7 @@ state = {
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-        requests.post(url, data={'chat_id': telegram_chat_id, 'text': msg})
+        requests.post(url, data={'chat_id': telegram_chat_id, 'text': msg}, proxies=proxies)
     except Exception as e:
         print(f"[Telegram Error] {e}")
 
@@ -109,7 +115,7 @@ def ai_confidence_score(symbol, signal):
 def news_filter():
     try:
         url = "https://cryptopanic.com/api/v1/posts/?auth_token=demo&kind=news"
-        res = requests.get(url)
+        res = requests.get(url, proxies=proxies)
         articles = res.json().get('results', [])
         for article in articles:
             for word in news_keywords:
@@ -174,7 +180,7 @@ def send_daily_summary():
     send_telegram(summary)
 
 def run_bot():
-    send_telegram("🤖 Bot Started with Smart Low-Budget Strategy")
+    send_telegram("🤖 Bot Started with Smart Low-Budget Strategy + Proxy Support")
     summary_timer = time.time()
     while True:
         if not news_filter():
@@ -216,3 +222,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
