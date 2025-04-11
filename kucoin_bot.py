@@ -5,12 +5,8 @@ import time
 import pandas as pd
 import requests
 import os
-from dotenv import load_dotenv
 from datetime import datetime
 import openai
-
-# === Load Environment Variables ===
-load_dotenv()
 
 # === API Keys ===
 kucoin_api_key = os.getenv('KUCOIN_API_KEY')
