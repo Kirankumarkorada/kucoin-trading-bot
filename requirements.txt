@@ -1,0 +1,5 @@
+ccxt
+openai==0.28
+python-dotenv
+pandas
+requests
