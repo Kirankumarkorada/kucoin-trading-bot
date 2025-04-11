@@ -1,12 +1,16 @@
-# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Updated with Print Logs to Keep Railway Running)
+# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Low Budget Optimized)
 
 import ccxt
 import time
 import pandas as pd
 import requests
 import os
+from dotenv import load_dotenv
 from datetime import datetime
 import openai
+
+# === Load Environment Variables ===
+load_dotenv()
 
 # === API Keys ===
 kucoin_api_key = os.getenv('KUCOIN_API_KEY')
@@ -16,9 +20,15 @@ telegram_token = os.getenv('TELEGRAM_TOKEN')
 telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
-# === Settings ===
-symbols = ['DOGE/USDT', 'SHIB/USDT']
-min_usdt_trade_value = 2.0
+# === Optimized Symbols for Low Budget ===
+symbols = [
+    'DOGE/USDT',
+    'SHIB/USDT',
+    'PEPE/USDT',
+    'FLOKI/USDT'
+]
+
+min_usdt_trade_value = 1.5  # Keep trade minimum to avoid errors
 investment_ratio = 0.5
 scalp_tp_percent = 0.5
 scalp_sl_percent = 0.3
@@ -63,7 +73,7 @@ def fetch_trade_amounts():
             price = prices[symbol]
             amount = budget / price
             value = amount * price
-            trade_amounts[symbol] = round(amount, 2 if 'DOGE' in symbol or 'SHIB' in symbol else 4) if value >= min_usdt_trade_value else 0.0
+            trade_amounts[symbol] = round(amount, 2 if 'DOGE' in symbol or 'SHIB' in symbol or 'PEPE' in symbol or 'FLOKI' in symbol else 4) if value >= min_usdt_trade_value else 0.0
         return trade_amounts
     except Exception as e:
         send_telegram(f"❌ Trade amount fetch error: {e}")
@@ -148,7 +158,7 @@ def place_order(symbol, side, trade_amounts):
             send_telegram(f"💰 {symbol} PnL: {pnl:.4f} USDT\n📊 Total: {s['profit_total']:.4f} USDT")
             log_trade(symbol, side, price, amount, pnl)
 
-        msg = f"📥 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}"
+        msg = f"📅 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}"
         send_telegram(msg)
         print(msg)
         log_trade(symbol, side, price, amount)
@@ -168,10 +178,9 @@ def send_daily_summary():
     send_telegram(summary)
 
 def run_bot():
-    send_telegram("🤖 Bot Started with Real AI + News Filter + Daily Summary")
+    send_telegram("🤖 Bot Started with Smart Low-Budget Strategy")
     summary_timer = time.time()
     while True:
-        print(f"\n🔄 Running loop at {datetime.now().strftime('%H:%M:%S')}")
         if not news_filter():
             print("🛑 News risk detected. Pausing trades.")
             time.sleep(300)
