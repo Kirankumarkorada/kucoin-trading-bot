@@ -1,16 +1,12 @@
-# 🚀 KuCoin Multi-Coin Smart Scalping Bot (with AI Filter Fix, News Filter, Daily Summary)
+# 🚀 KuCoin Multi-Coin Smart Scalping Bot (Updated with Print Logs to Keep Railway Running)
 
 import ccxt
 import time
 import pandas as pd
 import requests
 import os
-from dotenv import load_dotenv
 from datetime import datetime
-import random
 import openai
-
-
 
 # === API Keys ===
 kucoin_api_key = os.getenv('KUCOIN_API_KEY')
@@ -88,7 +84,6 @@ def check_scalp_signal(df):
         return 'sell'
     return None
 
-# === GPT-based AI Signal Evaluation (with Fix) ===
 def ai_confidence_score(symbol, signal):
     if signal is None:
         return 0.0
@@ -105,7 +100,6 @@ def ai_confidence_score(symbol, signal):
         print(f"[AI Score Error] {e}")
         return 0.0
 
-# === News Filter ===
 def news_filter():
     try:
         url = "https://cryptopanic.com/api/v1/posts/?auth_token=demo&kind=news"
@@ -177,6 +171,7 @@ def run_bot():
     send_telegram("🤖 Bot Started with Real AI + News Filter + Daily Summary")
     summary_timer = time.time()
     while True:
+        print(f"\n🔄 Running loop at {datetime.now().strftime('%H:%M:%S')}")
         if not news_filter():
             print("🛑 News risk detected. Pausing trades.")
             time.sleep(300)
@@ -202,7 +197,7 @@ def run_bot():
                 tp = s['entry_price'] * (1 + scalp_tp_percent / 100)
                 sl = s['entry_price'] * (1 - scalp_sl_percent / 100)
                 if price >= tp:
-                    send_telegram(f"🎯 TP HIT {symbol} at {price:.6f}")
+                    send_telegram(f"🌟 TP HIT {symbol} at {price:.6f}")
                     place_order(symbol, 'sell', trade_amounts)
                 elif price <= sl:
                     send_telegram(f"🛑 SL HIT {symbol} at {price:.6f}")
