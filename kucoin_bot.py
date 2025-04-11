@@ -16,10 +16,10 @@ telegram_token = os.getenv('TELEGRAM_TOKEN')
 telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
-# === Proxy Support ===
+# === Updated Proxy ===
 proxy = {
-    "http": "http://116.203.151.31:8080",
-    "https": "http://116.203.151.31:8080"
+    "http": "http://51.159.115.233:3128",
+    "https": "http://51.159.115.233:3128"
 }
 
 # === Symbols for Scalping ===
@@ -119,7 +119,7 @@ def news_filter():
         for article in articles:
             for word in news_keywords:
                 if word in article['title'].lower():
-                    send_telegram(f"🛑 News Risk: {article['title']}")
+                    send_telegram(f"🚩 News Risk: {article['title']}")
                     return False
         return True
     except Exception as e:
@@ -180,7 +180,7 @@ def run_bot():
     summary_timer = time.time()
     while True:
         if not news_filter():
-            print("🛑 News blocked trading")
+            print("🚩 News blocked trading")
             time.sleep(300)
             continue
         trade_amounts = fetch_trade_amounts()
