@@ -1,242 +1,130 @@
-# 🚀 KuCoin Multi-Coin Smart Trading Bot (Scalping + Swing + Momentum + AI + News + Proxy)
-
+# 🚀 KuCoin $5 Bot - Optimized for Micro Accounts
 import ccxt
 import time
 import pandas as pd
-import requests
 import os
 from datetime import datetime
-import openai
 
-# === API Keys ===
-kucoin_api_key = os.getenv('KUCOIN_API_KEY')
-kucoin_secret = os.getenv('KUCOIN_SECRET')
-kucoin_password = os.getenv('KUCOIN_PASSWORD')
-telegram_token = os.getenv('TELEGRAM_TOKEN')
-telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
-openai.api_key = os.getenv('OPENAI_API_KEY')
+# === CONFIG (ADJUST THESE!) === ⚡️
+SYMBOL = "DOGE/USDT"          # Only trade 1 coin
+INITIAL_CAPITAL = 5.0          # Your $5
+RISK_PER_TRADE = 0.10          # Risk $0.10 per trade (2%)
+TP_PERCENT = 3.0               # 3% take profit 
+SL_PERCENT = 1.5               # 1.5% stop loss
+CHECK_INTERVAL = 300           # 5-min checks (avoid rate limits)
 
-# === Proxy Settings (Webshare) ===
-proxy_host = "45.151.162.198"
-proxy_port = "6600"
-proxy_user = "akcuwuie"
-proxy_pass = "oyfguhicnuof"
-proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
-
-proxy = {
-    "http": proxy_url,
-    "https": proxy_url
-}
-
-# === Symbols ===
-symbols = ['DOGE/USDT', 'SHIB/USDT', 'PEPE/USDT', 'FLOKI/USDT']
-
-# === Parameters ===
-min_usdt_trade_value = 1.5
-investment_ratio = 0.5
-scalp_tp_percent = 0.5
-scalp_sl_percent = 0.3
-trail_percent = 0.2
-news_keywords = ["crash", "exploit", "hacked", "SEC", "lawsuit"]
-
-# === Initialize KuCoin ===
+# === KuCoin Setup === ⚡️ Removed proxies
 exchange = ccxt.kucoin({
-    'apiKey': kucoin_api_key,
-    'secret': kucoin_secret,
-    'password': kucoin_password,
-    'enableRateLimit': True,
-    'proxies': proxy
+    'apiKey': os.getenv('KUCOIN_API_KEY'),
+    'secret': os.getenv('KUCOIN_SECRET'),
+    'password': os.getenv('KUCOIN_PASSWORD'),
+    'enableRateLimit': True
 })
 
-# === Bot State ===
-state = {
-    symbol: {
-        'in_position': False,
-        'entry_price': 0,
-        'highest_price': 0,
-        'profit_total': 0.0,
-        'daily_pnl': 0.0
-    } for symbol in symbols
+# === State ===
+trade_state = {
+    'in_position': False,
+    'entry_price': 0,
+    'position_size': 0,
+    'pnl': 0.0
 }
 
-# === Telegram ===
-def send_telegram(msg):
+# === Telegram Alerts ===
+def send_alert(msg):
     try:
-        url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-        requests.post(url, data={'chat_id': telegram_chat_id, 'text': msg}, proxies=proxy)
-    except Exception as e:
-        print(f"[Telegram Error] {e}")
+        token = os.getenv('TELEGRAM_TOKEN')
+        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        if token and chat_id:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, json={'chat_id': chat_id, 'text': msg})
+    except:
+        pass  # Fail silently if no internet
 
-# === Log ===
-def log_trade(symbol, side, price, amount, pnl=0):
-    with open("trade_log.csv", "a") as f:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{now},{symbol},{side},{price},{amount},{pnl:.4f}\n")
-
-# === Get Amount ===
-def fetch_trade_amounts():
-    try:
-        balance = exchange.fetch_balance()['USDT']['free']
-        budget = balance * investment_ratio / len(symbols)
-        prices = {symbol: exchange.fetch_ticker(symbol)['last'] for symbol in symbols}
-        trade_amounts = {}
-        for symbol in symbols:
-            price = prices[symbol]
-            amount = budget / price
-            value = amount * price
-            trade_amounts[symbol] = round(amount, 2) if value >= min_usdt_trade_value else 0.0
-        return trade_amounts
-    except Exception as e:
-        send_telegram(f"❌ Trade amount fetch error: {e}")
-        return {symbol: 0.0 for symbol in symbols}
-
-# === Indicators ===
-def compute_indicators(df):
+# === Get Indicators === ⚡️ Simplified strategy
+def get_indicators():
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, '15m', limit=50)
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    
+    # EMA Crossover
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
-    df['ema50'] = df['close'].ewm(span=50).mean()
-    df['ema200'] = df['close'].ewm(span=200).mean()
+    
+    # RSI Filter
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
-    return df
-
-# === Signal Strategies ===
-def detect_strategy(df):
-    df = compute_indicators(df)
-    latest = df.iloc[-1]
     
-    if latest['close'] > latest['ema200']:
-        if latest['rsi'] < 30 and latest['ema9'] > latest['ema21']:
-            return 'scalp'
-        elif latest['ema50'] > latest['ema200'] and latest['rsi'] > 50:
-            return 'swing'
-        elif latest['ema9'] > latest['ema21'] and latest['rsi'] > 60:
-            return 'momentum'
-    return None
+    return df.iloc[-1]  # Latest candle
 
-# === AI Filter ===
-def ai_confidence_score(symbol, signal):
-    if signal is None:
-        return 0.0
-    try:
-        prompt = f"Analyze {symbol}. Signal: {signal.upper()}. Confidence score (0 to 1)?"
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        text = response.choices[0].message.content
-        score = float([s for s in text.split() if s.replace('.', '', 1).isdigit()][-1])
-        return score if score > 0.65 else 0.0
-    except Exception as e:
-        print(f"[AI Score Error] {e}")
-        return 0.0
+# === Position Sizing === ⚡️ Fixed for $5 accounts
+def calculate_size():
+    balance = exchange.fetch_balance()['USDT']['free']
+    risk_amount = min(RISK_PER_TRADE, balance * 0.02)  # Max 2% risk
+    ticker = exchange.fetch_ticker(SYMBOL)
+    size = risk_amount / (ticker['last'] * (SL_PERCENT/100))
+    return round(size, 2)  # Round to 2 decimals
 
-# === News ===
-def news_filter():
+# === Trade Execution === ⚡️ Added fee checks
+def execute_trade(side):
+    global trade_state
     try:
-        url = "https://cryptopanic.com/api/v1/posts/?auth_token=demo&kind=news"
-        res = requests.get(url, proxies=proxy)
-        articles = res.json().get('results', [])
-        for article in articles:
-            for word in news_keywords:
-                if word in article['title'].lower():
-                    send_telegram(f"🚩 News Risk: {article['title']}")
-                    return False
-        return True
-    except Exception as e:
-        print(f"[News Error] {e}")
-        return True
-
-# === Get OHLCV ===
-def get_ohlcv(symbol):
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=100)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        return df
-    except Exception as e:
-        print(f"[OHLCV Error] {symbol}: {e}")
-        return None
-
-# === Orders ===
-def place_order(symbol, side, trade_amounts):
-    s = state[symbol]
-    amount = trade_amounts.get(symbol, 0.0)
-    if amount == 0:
-        send_telegram(f"⚠️ Skipping {symbol}: Trade too small")
-        return
-    try:
-        order = exchange.create_market_order(symbol, side, amount)
-        time.sleep(2)
-        full = exchange.fetch_order(order['id'], symbol)
-        price = full['average']
         if side == 'buy':
-            s['entry_price'] = price
-            s['highest_price'] = price
-            s['in_position'] = True
-        else:
-            pnl = (price - s['entry_price']) * amount
-            s['profit_total'] += pnl
-            s['daily_pnl'] += pnl
-            s['entry_price'] = 0
-            s['in_position'] = False
-            send_telegram(f"💰 {symbol} PnL: {pnl:.4f} USDT\n📊 Total: {s['profit_total']:.4f} USDT")
-            log_trade(symbol, side, price, amount, pnl)
-        send_telegram(f"📥 {side.upper()} {symbol}\nAmount: {amount}\nPrice: {price}")
-        log_trade(symbol, side, price, amount)
+            size = calculate_size()
+            if size * exchange.fetch_ticker(SYMBOL)['last'] < 1.0:  # KuCoin minimum
+                send_alert("⚠️ Order too small - add funds")
+                return False
+            
+            order = exchange.create_market_order(SYMBOL, 'buy', size)
+            trade_state.update({
+                'in_position': True,
+                'entry_price': order['price'],
+                'position_size': order['amount']
+            })
+            send_alert(f"✅ BUY {SYMBOL} at {order['price']}")
+            return True
+            
+        elif side == 'sell':
+            order = exchange.create_market_order(SYMBOL, 'sell', trade_state['position_size'])
+            pnl = (order['price'] - trade_state['entry_price']) * trade_state['position_size']
+            trade_state.update({
+                'in_position': False,
+                'pnl': trade_state['pnl'] + pnl
+            })
+            send_alert(f"💰 SELL {SYMBOL} | PnL: ${pnl:.2f}")
+            return True
+            
     except Exception as e:
-        send_telegram(f"❌ Order Error {symbol}: {e}")
+        send_alert(f"❌ Trade failed: {str(e)}")
+        return False
 
-# === Daily Summary ===
-def send_daily_summary():
-    summary = "📊 Daily Profit Summary:\n"
-    total = 0.0
-    for symbol in symbols:
-        pnl = state[symbol]['daily_pnl']
-        summary += f"{symbol}: {pnl:.4f} USDT\n"
-        total += pnl
-        state[symbol]['daily_pnl'] = 0
-    summary += f"Total: {total:.4f} USDT"
-    send_telegram(summary)
+# === Strategy Logic === ⚡️ Conservative entries
+def check_strategy():
+    latest = get_indicators()
+    price = exchange.fetch_ticker(SYMBOL)['last']
+    
+    # Entry: EMA crossover + RSI not overbought
+    if not trade_state['in_position']:
+        if (latest['ema9'] > latest['ema21']) and (latest['rsi'] < 60):
+            execute_trade('buy')
+    
+    # Exit: TP/SL or 24h timeout
+    elif trade_state['in_position']:
+        pnl_pct = ((price - trade_state['entry_price']) / trade_state['entry_price']) * 100
+        if pnl_pct >= TP_PERCENT or pnl_pct <= -SL_PERCENT:
+            execute_trade('sell')
 
-# === Main Bot ===
-def run_bot():
-    send_telegram("🤖 Bot Started: Scalping + Swing + Momentum + AI + News")
-    summary_timer = time.time()
+# === Main Loop ===
+def run():
+    send_alert(f"🤖 Bot started with ${INITIAL_CAPITAL}")
     while True:
-        if not news_filter():
-            print("🚩 News blocked trading")
-            time.sleep(300)
-            continue
-        trade_amounts = fetch_trade_amounts()
-        for symbol in symbols:
-            df = get_ohlcv(symbol)
-            if df is None:
-                continue
-            signal = detect_strategy(df)
-            score = ai_confidence_score(symbol, signal)
-            price = df['close'].iloc[-1]
-            s = state[symbol]
-            if score == 0.0:
-                print(f"AI filtered weak {signal} for {symbol}")
-                continue
-            if not s['in_position'] and signal == 'buy':
-                place_order(symbol, 'buy', trade_amounts)
-            elif s['in_position']:
-                s['highest_price'] = max(s['highest_price'], price)
-                tp = s['entry_price'] * (1 + scalp_tp_percent / 100)
-                trail_stop = s['highest_price'] * (1 - trail_percent / 100)
-                sl = s['entry_price'] * (1 - scalp_sl_percent / 100)
-                if price >= tp or price <= sl or price <= trail_stop:
-                    tag = "TP" if price >= tp else ("SL" if price <= sl else "TRAIL")
-                    send_telegram(f"🔁 {tag} EXIT {symbol} at {price:.6f}")
-                    place_order(symbol, 'sell', trade_amounts)
-        if time.time() - summary_timer > 86400:
-            send_daily_summary()
-            summary_timer = time.time()
-        time.sleep(30)
+        try:
+            check_strategy()
+            time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            send_alert(f"⚠️ Bot error: {str(e)}")
+            time.sleep(60)
 
 if __name__ == "__main__":
-    run_bot()
+    run()
