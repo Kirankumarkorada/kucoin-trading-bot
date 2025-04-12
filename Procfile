@@ -1,1 +1,1 @@
-worker: python kucoin_bot.py
+python kucoin_bot.py
