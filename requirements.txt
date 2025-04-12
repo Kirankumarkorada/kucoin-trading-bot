@@ -1,5 +1,7 @@
-ccxt
+ccxt==4.2.85
 openai==0.28
-python-dotenv
+python-dotenv==1.0.0
 pandas
 requests
+flask==2.3.2
+
