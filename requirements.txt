@@ -1,5 +1,5 @@
-# requirements.txt
 ccxt==4.2.85
 pandas==2.1.4
 numpy==1.26.2
 flask==2.3.2
+requests==2.31.0
