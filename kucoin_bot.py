@@ -1,236 +1,145 @@
-from flask import Flask
-from threading import Thread
-import ccxt
-import pandas as pd
-import numpy as np
-import time
 import os
+import time
+import ccxt
 import requests
+import pandas as pd
 from datetime import datetime
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+load_dotenv()
 
-# ===== CONFIG =====
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-RISK_PER_TRADE = 1.0
-MIN_TRADE_USDT = 1.0
-ARBITRAGE_THRESHOLD = 0.5
+# KuCoin Credentials
+api_key = os.getenv("KUCOIN_API_KEY")
+api_secret = os.getenv("KUCOIN_SECRET")
+api_passphrase = os.getenv("KUCOIN_PASSPHRASE")
 
-# ===== STRATEGY CONFIG =====
-STRATEGIES = {
-    'scalp': {
-        'coins': ['SHIB/USDT', 'PEPE/USDT', 'FLOKI/USDT'],
-        'timeframe': '1m',
-        'rsi_buy': (28, 35),
-        'take_profit': 0.9,
-        'stop_loss': 0.6,
-        'max_trades': 2
-    },
-    'swing': {
-        'coins': ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-        'timeframe': '15m',
-        'ema_fast': 9,
-        'ema_slow': 21,
-        'take_profit': 3.0,
-        'stop_loss': 1.8,
-        'max_trades': 1
-    },
-    'arbitrage': {
-        'pairs': [('BTC/USDT', 'BTC/USDC'), ('ETH/USDT', 'ETH/USDC')],
-        'threshold': ARBITRAGE_THRESHOLD
-    }
-}
+# Telegram Bot
+telegram_token = os.getenv("TELEGRAM_TOKEN")
+telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-# ===== INITIALIZE =====
+# Bot Settings
+symbol = "BTC/USDT"
+timeframe = "5m"
+max_trade_amount = 4.5  # USDT (keep some for fees)
+take_profit = 1.02      # 2% TP
+stop_loss = 0.98        # 2% SL
+cooldown_minutes = 30   # after SL, rest
+min_usdt_balance = 4.0
+
+# Internal State
+in_position = False
+last_entry_price = 0
+cooldown_until = None
+
+# Initialize Exchange
 exchange = ccxt.kucoin({
-    'apiKey': os.getenv('KUCOIN_API_KEY'),
-    'secret': os.getenv('KUCOIN_SECRET'),
-    'password': os.getenv('KUCOIN_PASSWORD'),
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'spot',
-        'adjustForTimeDifference': True
-    }
+    'apiKey': api_key,
+    'secret': api_secret,
+    'password': api_passphrase,
+    'enableRateLimit': True
 })
 
-# ===== TELEGRAM ALERTS =====
-def send_alert(message):
+
+# 💬 Telegram Notify
+def send_telegram(message):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
-        requests.post(url, json=data, timeout=5)
+        requests.post(
+            f"https://api.telegram.org/bot{telegram_token}/sendMessage",
+            data={"chat_id": telegram_chat_id, "text": message}
+        )
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print("Telegram Error:", e)
 
-# ===== HYPEROPTIMIZED ENGINE =====
-class TurboTradingEngine:
-    def __init__(self):
-        self.active_trades = {}
-        self.last_arb_scan = 0
-    
-    def get_indicators(self, df, strategy):
-        # Ultra-fast RSI
-        close = df['close'].values
-        deltas = np.diff(close)
-        seed = deltas[:14]
-        up = seed[seed >= 0].sum()/14
-        down = -seed[seed < 0].sum()/14
-        rs = up/down
-        rsi = np.zeros_like(close)
-        rsi[:14] = 100. - (100./(1.+rs))
-        
-        for i in range(14, len(close)):
-            delta = deltas[i-1]
-            if delta > 0:
-                upval = delta
-                downval = 0.
-            else:
-                upval = 0.
-                downval = -delta
-                
-            up = (up*13 + upval)/14
-            down = (down*13 + downval)/14
-            rs = up/down
-            rsi[i] = 100. - (100./(1.+rs))
-            
-        df['rsi'] = rsi
-        
-        # Vectorized EMAs for swing strategy
-        if strategy == 'swing':
-            df['ema_fast'] = df['close'].ewm(span=STRATEGIES[strategy]['ema_fast'], adjust=False).mean()
-            df['ema_slow'] = df['close'].ewm(span=STRATEGIES[strategy]['ema_slow'], adjust=False).mean()
-        
-        return df.iloc[-1]
 
-    def check_arbitrage(self):
-        if time.time() - self.last_arb_scan < 300:
-            return
-            
-        self.last_arb_scan = time.time()
-        for pair1, pair2 in STRATEGIES['arbitrage']['pairs']:
-            try:
-                ticker1 = exchange.fetch_ticker(pair1)
-                ticker2 = exchange.fetch_ticker(pair2)
-                spread = abs(ticker1['last'] - ticker2['last'])/ticker1['last']*100
-                
-                if spread > STRATEGIES['arbitrage']['threshold']:
-                    message = (f"🚨 ARBITRAGE ALERT 🚨\n"
-                              f"{pair1}: ${ticker1['last']:.8f}\n"
-                              f"{pair2}: ${ticker2['last']:.8f}\n"
-                              f"Spread: {spread:.2f}%")
-                    send_alert(message)
-                    
-            except Exception as e:
-                print(f"Arbitrage scan error: {e}")
+# 📊 Get Latest OHLCV Data
+def fetch_data():
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=100)
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["rsi"] = df["close"].rolling(window=14).apply(lambda x: (100 - (100 / (1 + ((x.diff().clip(lower=0).sum()) / abs(x.diff().clip(upper=0).sum()))))) if len(x.dropna()) == 14 else None)
+    df["ema"] = df["close"].ewm(span=20).mean()
+    return df.dropna()
 
-    def execute_trade(self, symbol, strategy):
-        try:
-            balance = exchange.fetch_balance()['USDT']['free']
-            if balance < MIN_TRADE_USDT:
-                print(f"Skipping {symbol}: Low USDT balance ({balance})")
-                return False
-                
-            ohlcv = exchange.fetch_ohlcv(symbol, STRATEGIES[strategy]['timeframe'], limit=100)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            if df.empty or len(df) < 20:
-                return False
-                
-            latest = self.get_indicators(df, strategy)
-            price = exchange.fetch_ticker(symbol)['last']
-            amount = (balance * (RISK_PER_TRADE/100)) / price
-            
-            if amount * price < MIN_TRADE_USDT:
-                return False
-                
-            if strategy == 'scalp':
-                if STRATEGIES[strategy]['rsi_buy'][0] < latest['rsi'] < STRATEGIES[strategy]['rsi_buy'][1]:
-                    order = exchange.create_market_order(symbol, 'buy', amount)
-                    price_filled = order.get('price', price)
-                    send_alert(
-                        f"⚡️ SCALP ENTRY ⚡️\n"
-                        f"Coin: {symbol}\n"
-                        f"Price: ${price_filled:.8f}\n"
-                        f"Amount: {amount:.0f}\n"
-                        f"TP: {STRATEGIES[strategy]['take_profit']}%\n"
-                        f"SL: {STRATEGIES[strategy]['stop_loss']}%"
-                    )
-                    
-                    # OCO Order
-                    exchange.create_order(
-                        symbol,
-                        'limit',
-                        'sell',
-                        amount,
-                        price * (1 + STRATEGIES[strategy]['take_profit']/100),
-                        {
-                            'stopPrice': price * (1 - STRATEGIES[strategy]['stop_loss']/100),
-                            'type': 'stopLimit'
-                        }
-                    )
-                    return True
-            
-            elif strategy == 'swing':
-                if latest['ema_fast'] > latest['ema_slow'] and latest['close'] > latest['ema_slow']:
-                    order = exchange.create_market_order(symbol, 'buy', amount)
-                    price_filled = order.get('price', price)
-                    send_alert(
-                        f"📈 SWING ENTRY 📈\n"
-                        f"Coin: {symbol}\n"
-                        f"Price: ${price_filled:.8f}\n"
-                        f"Amount: {amount:.0f}\n"
-                        f"TP: {STRATEGIES[strategy]['take_profit']}%\n"
-                        f"SL: {STRATEGIES[strategy]['stop_loss']}%"
-                    )
-                    
-                    # OCO Order
-                    exchange.create_order(
-                        symbol,
-                        'limit',
-                        'sell',
-                        amount,
-                        price * (1 + STRATEGIES[strategy]['take_profit']/100),
-                        {
-                            'stopPrice': price * (1 - STRATEGIES[strategy]['stop_loss']/100),
-                            'type': 'stopLimit'
-                        }
-                    )
-                    return True
-                    
-        except Exception as e:
-            send_alert(f"❌ TRADE FAILED: {str(e)}")
-            print(f"Trade error: {e}")
-            return False
 
-engine = TurboTradingEngine()
+# 📈 Entry Conditions
+def should_buy(df):
+    latest = df.iloc[-1]
+    if latest["close"] > latest["ema"] and latest["rsi"] < 35:
+        return True
+    return False
 
-def trading_bot():
-    send_alert("🤖 ULTRA BOT ACTIVATED - Monitoring Markets")
-    print("⚡ Turbo Engine Started ⚡")
-    
-    while True:
-        try:
-            engine.check_arbitrage()
-            for strategy in ['scalp', 'swing']:
-                for symbol in STRATEGIES[strategy]['coins']:
-                    if engine.execute_trade(symbol, strategy):
-                        time.sleep(10)
-            time.sleep(10)
-        except Exception as e:
-            send_alert(f"🚨 CRITICAL ERROR: {str(e)}")
-            print(f"Main loop error: {e}")
+
+# 💰 Get Balance
+def get_usdt_balance():
+    balance = exchange.fetch_balance()
+    return balance['total']['USDT']
+
+
+# 🚀 Buy Order
+def place_buy():
+    global in_position, last_entry_price
+    usdt = get_usdt_balance()
+    if usdt < min_usdt_balance:
+        send_telegram("⚠️ Not enough USDT to trade.")
+        return
+    price = exchange.fetch_ticker(symbol)['ask']
+    amount = round(max_trade_amount / price, 6)
+    order = exchange.create_market_buy_order(symbol, amount)
+    last_entry_price = price
+    in_position = True
+    send_telegram(f"✅ Bought {amount} {symbol.split('/')[0]} at {price:.2f} USDT")
+    return order
+
+
+# 📤 Sell Order
+def place_sell(reason):
+    global in_position, cooldown_until
+    balance = exchange.fetch_balance()
+    coin = symbol.split('/')[0]
+    amount = balance['free'].get(coin, 0)
+    if amount > 0:
+        price = exchange.fetch_ticker(symbol)['bid']
+        order = exchange.create_market_sell_order(symbol, amount)
+        profit_loss = (price - last_entry_price) / last_entry_price * 100
+        msg = f"❌ Sold {coin} at {price:.2f} USDT\nReason: {reason}\nP/L: {profit_loss:.2f}%"
+        send_telegram(msg)
+        in_position = False
+        if "STOP" in reason:
+            cooldown_until = time.time() + (cooldown_minutes * 60)
+        return order
+    return None
+
+
+# 📦 Daily Log
+def log_trade(msg):
+    with open("trade_log.csv", "a") as f:
+        f.write(f"{datetime.now()},{msg}\n")
+
+
+# 🔁 Main Loop
+while True:
+    try:
+        if cooldown_until and time.time() < cooldown_until:
+            print("🕑 Cooldown active...")
             time.sleep(60)
+            continue
 
-# ===== DEFINE A BASIC ROUTE =====
-@app.route("/")
-def index():
-    return "Trading Bot is Running!", 200
+        df = fetch_data()
 
-if __name__ == "__main__":
-    Thread(target=trading_bot).start()
-    app.run(host='0.0.0.0', port=10000)
+        if not in_position and should_buy(df):
+            order = place_buy()
+            log_trade(f"BUY,{last_entry_price}")
+        elif in_position:
+            current_price = df.iloc[-1]["close"]
+            if current_price >= last_entry_price * take_profit:
+                place_sell("TAKE PROFIT")
+                log_trade(f"SELL-TP,{current_price}")
+            elif current_price <= last_entry_price * stop_loss:
+                place_sell("STOP LOSS")
+                log_trade(f"SELL-SL,{current_price}")
 
+        time.sleep(60)
+
+    except Exception as e:
+        print("Error:", e)
+        send_telegram(f"⚠️ Bot Error:\n{e}")
+        time.sleep(60)
