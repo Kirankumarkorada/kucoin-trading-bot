@@ -1,4 +1,3 @@
-# 🚀 KUCOIN ULTRA BOT (v6.0) - All-In-One Solution
 from flask import Flask
 from threading import Thread
 import ccxt
@@ -11,12 +10,12 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ===== CONFIG ===== (EDIT THESE!)
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')       # From @BotFather
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')   # Your chat ID
-RISK_PER_TRADE = 1.0                               # 1% of balance
-MIN_TRADE_USDT = 1.0                              # KuCoin minimum
-ARBITRAGE_THRESHOLD = 0.5                         # 0.5% price difference
+# ===== CONFIG =====
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+RISK_PER_TRADE = 1.0
+MIN_TRADE_USDT = 1.0
+ARBITRAGE_THRESHOLD = 0.5
 
 # ===== STRATEGY CONFIG =====
 STRATEGIES = {
@@ -101,21 +100,15 @@ class TurboTradingEngine:
             
         df['rsi'] = rsi
         
-        # Vectorized EMAs
+        # Vectorized EMAs for swing strategy
         if strategy == 'swing':
-            df['ema_fast'] = df['close'].ewm(
-                span=STRATEGIES[strategy]['ema_fast'], 
-                adjust=False
-            ).mean()
-            df['ema_slow'] = df['close'].ewm(
-                span=STRATEGIES[strategy]['ema_slow'], 
-                adjust=False
-            ).mean()
+            df['ema_fast'] = df['close'].ewm(span=STRATEGIES[strategy]['ema_fast'], adjust=False).mean()
+            df['ema_slow'] = df['close'].ewm(span=STRATEGIES[strategy]['ema_slow'], adjust=False).mean()
         
         return df.iloc[-1]
 
     def check_arbitrage(self):
-        if time.time() - self.last_arb_scan < 300:  # 5 min cooldown
+        if time.time() - self.last_arb_scan < 300:
             return
             
         self.last_arb_scan = time.time()
@@ -139,17 +132,14 @@ class TurboTradingEngine:
         try:
             balance = exchange.fetch_balance()['USDT']['free']
             if balance < MIN_TRADE_USDT:
+                print(f"Skipping {symbol}: Low USDT balance ({balance})")
                 return False
                 
-            ohlcv = exchange.fetch_ohlcv(
-                symbol, 
-                STRATEGIES[strategy]['timeframe'], 
-                limit=100
-            )
-            df = pd.DataFrame(ohlcv, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume'
-            ])
-            
+            ohlcv = exchange.fetch_ohlcv(symbol, STRATEGIES[strategy]['timeframe'], limit=100)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            if df.empty or len(df) < 20:
+                return False
+                
             latest = self.get_indicators(df, strategy)
             price = exchange.fetch_ticker(symbol)['last']
             amount = (balance * (RISK_PER_TRADE/100)) / price
@@ -157,16 +147,14 @@ class TurboTradingEngine:
             if amount * price < MIN_TRADE_USDT:
                 return False
                 
-            # Scalp Strategy
             if strategy == 'scalp':
-                if (latest['rsi'] < STRATEGIES[strategy]['rsi_buy'][1] and 
-                    latest['rsi'] > STRATEGIES[strategy]['rsi_buy'][0]):
-                    
+                if STRATEGIES[strategy]['rsi_buy'][0] < latest['rsi'] < STRATEGIES[strategy]['rsi_buy'][1]:
                     order = exchange.create_market_order(symbol, 'buy', amount)
+                    price_filled = order.get('price', price)
                     send_alert(
                         f"⚡️ SCALP ENTRY ⚡️\n"
                         f"Coin: {symbol}\n"
-                        f"Price: ${order['price']:.8f}\n"
+                        f"Price: ${price_filled:.8f}\n"
                         f"Amount: {amount:.0f}\n"
                         f"TP: {STRATEGIES[strategy]['take_profit']}%\n"
                         f"SL: {STRATEGIES[strategy]['stop_loss']}%"
@@ -186,16 +174,14 @@ class TurboTradingEngine:
                     )
                     return True
             
-            # Swing Strategy
             elif strategy == 'swing':
-                if (latest['ema_fast'] > latest['ema_slow'] and 
-                    latest['close'] > latest['ema_slow']):
-                    
+                if latest['ema_fast'] > latest['ema_slow'] and latest['close'] > latest['ema_slow']:
                     order = exchange.create_market_order(symbol, 'buy', amount)
+                    price_filled = order.get('price', price)
                     send_alert(
                         f"📈 SWING ENTRY 📈\n"
                         f"Coin: {symbol}\n"
-                        f"Price: ${order['price']:.8f}\n"
+                        f"Price: ${price_filled:.8f}\n"
                         f"Amount: {amount:.0f}\n"
                         f"TP: {STRATEGIES[strategy]['take_profit']}%\n"
                         f"SL: {STRATEGIES[strategy]['stop_loss']}%"
@@ -220,7 +206,6 @@ class TurboTradingEngine:
             print(f"Trade error: {e}")
             return False
 
-# ===== MAIN BOT =====
 engine = TurboTradingEngine()
 
 def trading_bot():
@@ -229,22 +214,23 @@ def trading_bot():
     
     while True:
         try:
-            # Check arbitrage opportunities
             engine.check_arbitrage()
-            
-            # Execute strategies
             for strategy in ['scalp', 'swing']:
                 for symbol in STRATEGIES[strategy]['coins']:
                     if engine.execute_trade(symbol, strategy):
-                        time.sleep(10)  # Rate limit
-                        
-            time.sleep(10)  # Main loop delay
-            
+                        time.sleep(10)
+            time.sleep(10)
         except Exception as e:
             send_alert(f"🚨 CRITICAL ERROR: {str(e)}")
             print(f"Main loop error: {e}")
             time.sleep(60)
 
+# ===== DEFINE A BASIC ROUTE =====
+@app.route("/")
+def index():
+    return "Trading Bot is Running!", 200
+
 if __name__ == "__main__":
     Thread(target=trading_bot).start()
     app.run(host='0.0.0.0', port=10000)
+
